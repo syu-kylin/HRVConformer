@@ -1,0 +1,10 @@
+matplotlib==3.10.1
+numpy==2.2.4
+pandas==2.2.3
+SciencePlots==2.1.1
+scikit_learn==1.6.1
+scipy==1.15.2
+timm==1.0.15
+torch==2.5.1
+torchsummary==1.5.1
+wandb==0.19.8
