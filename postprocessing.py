@@ -9,127 +9,11 @@ import logging
 
 from utils import Params
 from train_func import evaluate
-from project_init import project_init
+from project_init import get_args
 import misc
 
 logger = logging.getLogger('project_log')
 
-def majority_vote(pred_epochs):
-    # print(f'pred_epochs: {pred_epochs}')
-    calss_counts = np.bincount(pred_epochs)
-    final_pred = calss_counts.argmax()
-    
-    return int(final_pred)
-
-def epoch_check(epoch_struct):
-
-    N_files = len(epoch_struct)
-    file_ids, n_epochs = [], []
-    grades, grades_binary = [], []
-    for i in range(N_files):
-        file_id = str(epoch_struct[i]['file_id'])
-        grade = int(epoch_struct[i]['EEG_grade'])
-        num_epoch_one_file = epoch_struct[i]['n_epochs']
-        # file_id = epoch_struct[i]['file_id'][0]
-        # grade = epoch_struct[i]['EEG_grade'][0][0]
-        # num_epoch_one_file = epoch_struct[i]['n_epochs'][0][0]
-        
-        n_epochs.append(num_epoch_one_file)
-        file_ids.append(file_id)
-        grades.append(grade)
-        
-        # if grade in (0,1):
-        #     grade = 0
-        # elif grade in (2,3,4):
-        #     grade = 1
-
-        grades_binary.append(grade)
-        
-    # annotation = {'file_id': file_ids, 'grade': grades}
-    # anno_df = pd.DataFrame(annotation)
-    # anno_df.to_csv('annotaion_train.csv', index=False)
-
-    return n_epochs, file_ids, grades, grades_binary
-
-def postprocessing(my_model, val_epochs, val_generator, device, set_name, config):
-    """  
-    This functon is a post-processing procedure after training. It uses a majority 
-    vote method to generate a prediction for each one-hour epoch and validation 
-    accuracy after post-processing. It also summarize the validation results of this 
-    run into log file.
-    Args:
-          my_model: (nn.modules) the best model selected in the train.
-          val_epochs: (numpy struct) the validation rr epochs.
-          val_generator: (dataloder) the generater of the validation dataloder.
-          loss_func: (nn.loss_func) the loss function same as the train.
-          set_name: (str) "validation" or "test".
-          param: (class of Params) the parameters of run config.
-    """
-
-    # Load the run log json
-    param_log = Params(config.log_json_fn)
-
-    if set_name == 'validation':
-        val_var = 'val'
-        val_str = 'validation'
-        val_auc = param_log.val_auc_bm
-    elif set_name == 'test':
-        val_var = 'test'
-        val_str = 'test'
-        val_auc = param_log.test_auc_bm
-
-    val_stats, label_epoch, pred_epoch = evaluate(my_model, val_generator, device)
-    val_acc_bm = val_stats['acc']
-    preds_arr = torch.cat(pred_epoch).cpu().numpy()
-    labels_arr = torch.cat(label_epoch).cpu().numpy()
-    
-    n_epochs, file_ids_val, grades_orig, grades_bin = epoch_check(val_epochs)
-    
-    final_preds, verify_labels = [], []
-    seg_start = 0
-    for x in n_epochs:
-        seg_end = seg_start + x
-        pred_one_file = preds_arr[seg_start:seg_end]
-        label_one_file = labels_arr[seg_start:seg_end]
-    
-        final_pred_one_file = majority_vote(pred_one_file)
-        final_label_one_file = majority_vote(label_one_file)
-    
-        final_preds.append(final_pred_one_file)
-        verify_labels.append(final_label_one_file)
-        seg_start = seg_end
-    
-    val_acc_post = sum(np.array(final_preds)==np.array(verify_labels))/len(verify_labels)
-    if config.distributed:
-        val_acc_post = misc.all_reduce_mean(val_acc_post)
-
-    if misc.is_main_process():
-        val_bm_dict = {
-            f'{val_var}_acc_post': val_acc_post,
-            f'{val_var}_acc_bm': val_acc_bm,
-        }
-
-        # Add to run log json
-        param_log.update(val_bm_dict)
-        
-        message_terminal = ''.join([
-            '\n', '-'*45, '\n',
-            '\033[1mPostprocessing\033[0m\n\n',
-            '\033[1m{} set file_ids:\n\033[0m{}\n\n'.format(val_str, file_ids_val),
-            '\033[1m{} accuracy after postprocessing:\033[0m{:.4f}\n'.format(val_str, val_acc_post),
-            '\033[1m{} accuracy before postprocessing:\033[0m{:.4f}\n'.format(val_str, val_acc_bm),
-            '\033[1m{0:<20}:\033[0m {1:.4f}\n'.format(f'{val_str} auc', val_auc),
-            '\033[1m{0:<20}:\033[0m {1}\n'.format('final predictions', final_preds),
-            '\033[1m{0:<20}:\033[0m {1}\n'.format('true labels', grades_bin),
-            '\033[1m{0:<20}:\033[0m {1}\n'.format('verified labels', verify_labels),
-            '_'*70, '\n\n\n',
-        ])
-        logger.info(message_terminal)
-        
-        if bool(config.wandb_enable) and set_name == 'validation':
-            wandb.summary[f'{val_var}_acc_post'] = val_acc_post
-            wandb.finish()
-    
 
 
 def train_summary(config):
@@ -150,17 +34,19 @@ def train_summary(config):
     message = ''.join([
         '\n', '-'*45, '\n', f'run name: {config.run_name}\n',
         'Training result summary:\n\n',
-        'test accuracy after postprocessing:{:.4f}\n'.format(param_log.test_acc_post),
+        'test accuracy after postprocessing:{:.4f}\n'.format(param_log.test_acc_epoch),
         'test accuracy before postprocessing: {:.4f}\n'.format(param_log.test_acc_bm),
-        'test AUC: {:.4f}\n\n'.format(param_log.test_auc_bm),
+        'test AUC on epoch level: {:.4f}\n'.format(param_log.test_auc_epoch),
+        'test AUC on segment level: {:.4f}\n\n'.format(param_log.test_auc_seg),
 
-        'validation accuracy after postprocessing:{:.4f}\n'.format(param_log.val_acc_post),
+        'validation accuracy after postprocessing:{:.4f}\n'.format(param_log.val_acc_epoch_bm),
         'validation accuracy before postprocessing: {:.4f}\n'.format(param_log.val_acc_bm),
-        'validation AUC: {:.4f}\n\n'.format(param_log.val_auc_bm),
+        'validation AUC on epoch level: {:.4f}\n'.format(param_log.val_auc_epoch_bm),
+        'validation AUC on segment level: {:.4f}\n\n'.format(param_log.val_auc_seg_bm),
 
-        'highest train AUC: {:.4f}\n'.format(max(param_log.train_auc)),
-        'highest train ACC: {:.4f}\n'.format(max(param_log.train_acc)),
-        'lowest train loss: {:.4f}\n'.format(min(param_log.train_loss)),
+        'highest/bm train AUC: {:.4f}/{:.4f}\n'.format(max(param_log.train_auc), param_log.train_auc_bm),
+        'highest/bm train ACC: {:.4f}/{:.4f}\n'.format(max(param_log.train_acc), param_log.train_acc_bm),
+        'lowest/bm train loss: {:.4f}/{:.4f}\n'.format(min(param_log.train_loss), param_log.train_loss_bm),
         'best model acquired from epoch: {}/{}\n\n'.format(param_log.epoch_bm, config.epochs),
         
         'Training parameters:\n',
@@ -197,15 +83,17 @@ def train_summary(config):
 
     train_summary = {
         'run_name': config.run_name,
-        'test_acc_post': param_log.test_acc_post,
+        'test_acc_post': param_log.test_acc_epoch,
         'test_acc_bef': param_log.test_acc_bm,
-        'test_auc_bm': param_log.test_auc_bm,
-        'val_acc_post': param_log.val_acc_post,
+        'test_auc_bm': param_log.test_auc_seg,
+        'test_auc_bm_epoch': param_log.test_auc_epoch,
+        'val_acc_post': param_log.val_acc_epoch_bm,
         'val_acc_bef': param_log.val_acc_bm,
-        'val_auc_bm': param_log.val_auc_bm,
-        'highest train auc': max(param_log.train_auc),
-        'highest train acc': max(param_log.train_acc),
-        'lowest train loss': min(param_log.train_loss),
+        'val_auc_bm': param_log.val_auc_seg_bm,
+        'val_auc_bm_epoch': param_log.val_auc_epoch_bm,
+        'train auc(bm/highest)': '{:.4f}/{:.4f}'.format(max(param_log.train_auc), param_log.train_auc_bm),
+        'train acc(bm/highest)': '{:.4f}/{:.4f}'.format(max(param_log.train_acc), param_log.train_acc_bm),
+        'train loss(bm/lowest)': '{:.4f}/{:.4f}'.format(min(param_log.train_loss), param_log.train_loss_bm),
         'best model epoch': '{}/{}'.format(param_log.epoch_bm, config.epochs), 
         'architecture': config.model_name,
         'epochs': config.epochs,
@@ -237,7 +125,7 @@ def train_summary(config):
     }
     
     run_summary_df = pd.Series(train_summary).to_frame().T
-    fn = f'{config.parent_dir}/train_summary_{config.group_name}.csv'
+    fn = f'./log/{config.job_name}/{config.group_name}/train_summary_{config.group_name}.csv'
     if os.path.isfile(fn):
         run_summary_df.to_csv(fn, mode='a', header=False, index=False)
     else:
@@ -250,8 +138,8 @@ def train_summary(config):
 if __name__ == '__main__':
 
     job_name = 'ModelTest'
-    group_name = 'HrvConformer'
-    run_id = '2025-03-17 19-56-45 1'
+    group_name = 'HRVConformer'
+    run_id = '20250626_152336_5'
 
     config_json_path = f'./log/{job_name}/{group_name}/{run_id}/run_config-{run_id}.json'
     config = Params(config_json_path)

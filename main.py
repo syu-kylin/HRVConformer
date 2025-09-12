@@ -1,4 +1,5 @@
 import os
+import sys
 import datetime
 import argparse
 import json
@@ -15,33 +16,33 @@ import logging
 
 import misc
 from utils import Params, CosineWarmupScheduler, CosineWarmupRestartsScheduler, setup_seed
-from data_loader import SignalDataset, NormalizeAndToTensor, read_split_data
+from data_loader import SignalDataset, NormalizeAndToTensor, ComposeRR, RRAugment
+from data_loader import split_baby_independent, read_split_data
 from model.ConformerNet import confermer_net
-from model.FCN import FCN13_HRV_5min
-from model.HRVTransformer import hrv_transformer
-from model.ResNet import resnet1d50
 from utils import NativeScalerWithGradNormCount as NativeScaler
 from train_func import train_one_epoch, evaluate
 from matrix import auc_binary
-from utils import get_structed_log, keep_first_n_line
+from utils import get_structed_log, keep_first_n_line, save_as_json
 from postprocessing import postprocessing, train_summary
 from plot_figures import plot_curves
-from project_init import project_init, setup_logger
+from project_init import setup_logger, get_args
 
 logger = logging.getLogger('project_log')
 
 def main(config):
 
     setup_seed(config.seed)
-    misc.init_distributed_mode(config)
+    if config.distributed:
+        misc.init_distributed_mode(config)
     device = torch.device(config.device)
 
     # Load data
-    train_epochs, val_epochs, test_epochs = read_split_data(config.window_length, config.seed_epoch)
+    misc.memory_usage()
+    train_epochs, val_epochs, test_epochs = read_split_data(config.window_length, config.seed_epoch, config.train_epochs_ratio)
     signal_transform = NormalizeAndToTensor(mean=config.mean, std=config.std, 
                                             min=config.min, max=config.max, 
-                                            min_max_enable=config.min_max_enable)    
-    train_dataset = SignalDataset(train_epochs, 'train', signal_transform)
+                                            min_max_enable=config.min_max_enable) 
+    train_dataset = SignalDataset(train_epochs, 'train', signal_transform)     # train set add augmentation
     val_dataset = SignalDataset(val_epochs, 'validation', signal_transform)
     test_dataset = SignalDataset(test_epochs, 'test', signal_transform)
 
@@ -77,20 +78,12 @@ def main(config):
     data_loader_test = DataLoader(
         test_dataset, batch_size=config.batchsize, sampler=sampler_test,
         num_workers=config.num_workers, pin_memory=True, drop_last=False)
-    
-    # Load model
-    # HRVConformerNet
-    if config.model_name == 'HrvConformer':
-        model = confermer_net(config).to(device)
-    # HRVResNet
-    elif config.model_name == 'HrvResnet':
-        model = resnet1d50(in_channels=1, num_classes=config.n_class, drop_rate=config.dropout).to(device)
-    # HRVTransformer
-    elif config.model_name == 'HrvTransformer':
-        model = hrv_transformer(config).to(device)
+    misc.memory_usage()
 
+    # Load model
+    model = confermer_net(config).to(device)
     model_without_ddp = model
-    print(f'\033[35;1mmodel initialized with {model.__class__.__name__}!\033[0m')
+    logger.info(f'\033[35;1mmodel initialized with {model.__class__.__name__}!\033[0m')
 
     if config.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.gpu])
@@ -101,12 +94,10 @@ def main(config):
     optimizer = torch.optim.AdamW(param_groups, lr=config.learning_rate, 
                                   betas=(config.beta1, config.beta2), 
                                   eps=config.epsilon)
-    loss_func = torch.nn.CrossEntropyLoss()
+    loss_func = torch.nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
     scaler = NativeScaler()
     lr_scheduler = CosineWarmupScheduler(optimizer=optimizer, warmup=config.warmup_epoch, max_iters=config.epochs, eta_min=config.lr_min)
-    # lr_scheduler = CosineWarmupRestartsScheduler(optimizer, warmup_epochs=config.warmup_epoch, T_0=config.lr_T0, T_mult=config.lr_Tmult, eta_min=config.lr_min, last_epoch=-1)
-    # lr_scheduler = None
-    config.model_name = model.__class__.__name__
+    config.model_name = model_without_ddp.__class__.__name__
     config.loss_func = loss_func.__class__.__name__
     config.optimizer_name = optimizer.__class__.__name__
     config.lr_scheduler = lr_scheduler.__class__.__name__
@@ -124,12 +115,10 @@ def main(config):
     def moving_avg(value, moving_value, beta):
         moving_value = (1-beta)*value + beta*moving_value
         return moving_value
-    max_auc = 0.0
-
-    wandb.init(project=config.project_name, name=f'{config.run_name}', 
-               job_type=config.job_name, group=config.group_name)
-    # wandb.config.update(config)
-    wandb.watch(model, log='gradients', log_freq=100)   # log gradients every 1000 steps
+    max_auc, min_loss = 0.0, 100
+    if config.wandb_enable:
+        wandb.init(project=config.project_name, name=f'{config.run_name}', 
+                job_type=config.job_name, group=config.group_name)
 
     # log the training process of each epoch
     space_fmt = ':' + str(len(str(config.epochs))) + 'd'
@@ -146,7 +135,7 @@ def main(config):
         'iter time: {step_time:.3f}s/step',
         'data time: {data_time:.3f}s/step',
         'peak mem: {peak_mem:.3f}GB',
-        'eta: {eta}/{eta_total_time}.'
+        'eta: {eta}<{elapsed_time}.'
     ]
     log_msg = ', '.join(log_msg)
 
@@ -161,6 +150,7 @@ def main(config):
     logger.info(f"\033[35;1m{time_now} Start training for {config.epochs} epochs from epoch {config.start_epoch}.\033[0m")
 
     for epoch in range(config.start_epoch, config.epochs):
+
         model.train()
         if config.distributed:
             data_loader_train.sampler.set_epoch(epoch)
@@ -174,11 +164,13 @@ def main(config):
                 loss_scaler=scaler, lr_scheduler=lr_scheduler, epoch=epoch) 
             
         model.eval()
-        val_stats = evaluate(model, data_loader_val, device)[0]
-        val_auc = auc_binary(model, data_loader_val, device)[-1]
-        train_auc = auc_binary(model, data_loader_train, device)[-1]
+        val_stats = evaluate(model, data_loader_val, device)
+        val_auc = auc_binary(model, data_loader_val, device)
+        train_auc = auc_binary(model, data_loader_train, device)
+
         train_loss, train_acc = train_stats['loss'], train_stats['acc']
-        val_loss, val_acc = val_stats['loss'], val_stats['acc']
+        train_grad_norm = train_stats['grad_norm']
+        val_loss, val_acc_seg, val_acc_epoch = val_stats['loss'], val_stats['acc'], val_stats['acc_epoch']
         step_time, data_time = train_stats['step_time'], train_stats['step_data_time']
         epoch_time = train_stats['epoch_time']
         lr = optimizer.param_groups[0]['lr']
@@ -187,45 +179,53 @@ def main(config):
         # Taking the exponentially moving average of validation AUC
         if epoch == 0 or epoch == config.start_epoch:
             moving_val_auc = val_auc
+            moving_val_loss = val_loss
         else:
             moving_val_auc = moving_avg(val_auc, moving_val_auc, beta_ema)
+            moving_val_loss = moving_avg(val_loss, moving_val_loss, beta_ema)
 
+        # print the training process
         if misc.is_main_process() and (epoch + 1) % config.print_freq == 0 or epoch in (config.start_epoch, config.start_epoch + 1, config.epochs - 1):
-            eta = (config.epochs - epoch) * (time.time() - start_time) / (epoch + 1)
-            eta_str = str(datetime.timedelta(seconds=int(eta)))
-            eta_total_time = (config.epochs - config.start_epoch) * (time.time() - start_time) / (epoch + 1)
-            eta_total_time_str = str(datetime.timedelta(seconds=int(eta_total_time)))
-            print(log_msg.format(
+            eta_end = (config.epochs - (epoch + 1)) * (time.time() - start_time) / (epoch + 1)
+            eta_end_str = str(datetime.timedelta(seconds=int(eta_end)))
+            time_elapsed = (time.time() - start_time)
+            time_elapsed_str = str(datetime.timedelta(seconds=int(time_elapsed)))
+            logger.info(log_msg.format(
                 epoch + 1, config.epochs, lr=lr, train_loss=train_loss, val_loss=val_loss,
-                train_acc=train_acc, val_acc=val_acc, train_auc=train_auc, val_auc=val_auc,
+                train_acc=train_acc, val_acc=val_acc_seg, train_auc=train_auc, val_auc=val_auc,
                 epoch_time=train_stats['epoch_time'], step_time=train_stats['step_time'], data_time=train_stats['step_data_time'],
-                peak_mem=train_stats['memory'], eta=eta_str, eta_total_time=eta_total_time_str,
+                peak_mem=train_stats['memory'], eta=eta_end_str, elapsed_time=time_elapsed_str,
             ))
         
+        # log the training process to file and wandb
         if config.outdir and misc.is_main_process():
             log_stats = {
-                'epoch': epoch,'lr': lr,
+                'epoch': epoch,'lr': lr, 'grad_norm': train_grad_norm, 'clipped_norm': train_stats['clipped_norm'],
                 'train_loss': train_loss, 'val_loss': val_loss,
-                'train_acc': train_acc, 'val_acc': val_acc,
+                'train_acc': train_acc, 'val_acc': val_acc_seg, 'val_acc_epoch': val_acc_epoch,
                 'train_auc': train_auc, 'val_auc': val_auc, 'moving_val_auc': moving_val_auc,
             }
             with open(config.run_log_fn, mode="a", encoding="utf-8") as f:
                 f.write(json.dumps(log_stats) + "\n")    
-        
-            wandb.log({'train_loss': train_loss, 'val_loss': val_loss, 
-                        'train_acc': train_acc, 'val_acc': val_acc,
-                        'train_auc': train_auc, 'val_auc': val_auc,
-                        'moving_val_auc':moving_val_auc, 'lr': lr, 'epoch': epoch})
+            if config.wandb_enable:
+                # log the training process to wandb
+                wandb.log({'train_loss': train_loss, 'val_loss': val_loss, 
+                            'train_acc': train_acc, 'val_acc': val_acc_seg, 'val_acc_epoch': val_acc_epoch,
+                            'train_auc': train_auc, 'val_auc': val_auc,
+                            'moving_val_auc':moving_val_auc, 'lr': lr, 'epoch': epoch})
             
         # get the best model
+        # if moving_val_loss < min_loss:
         if moving_val_auc > max_auc:
+            # min_loss = moving_val_loss
             max_auc = moving_val_auc
-            val_acc_bm = val_acc
+            val_acc_bm = val_acc_seg
+            val_acc_epoch_bm = val_acc_epoch
             train_acc_bm = train_acc
-            best_model_epoch = epoch
             val_auc_bm = val_auc
             train_auc_bm = train_auc
-            # best_model_path = f"{config.outdir}/model-{config.run_name}.pth"
+            train_loss_bm = train_loss
+            best_model_epoch = epoch
 
             if misc.is_main_process():
                 torch.save(model_without_ddp.state_dict(), config.best_model_path)
@@ -235,6 +235,7 @@ def main(config):
     total_time_str = str(datetime.timedelta(seconds=int(training_time)))
     assert all(torch.equal(p1, p2) for p1, p2 in zip(model.parameters(), model_without_ddp.parameters()))
     metric_logger.synchronize_between_processes()
+    misc.memory_usage()
 
     # all read write operations should be done in the main process
     if misc.is_main_process():
@@ -242,7 +243,8 @@ def main(config):
             '\n', '='*45, '\n',
             f"Best model found at epoch: {best_model_epoch}/{config.epochs}.\n",
             f"Best model validation AUC {val_auc_bm:.4f}.\n",
-            f"Best model validation accuracy {val_acc_bm:.4f}.\n",
+            f"Best model validation accuracy on segment level {val_acc_bm:.4f}.\n",
+            f"Best model validation accuracy on epoch level {val_acc_epoch_bm:.4f}.\n",
             f"Best model training AUC {train_auc_bm:.4f}.\n", 
             f"Best mdoel training accuracy {train_acc_bm:.4f}.\n\n",
             '='*45, '\n',
@@ -257,8 +259,10 @@ def main(config):
             'epoch_bm': best_model_epoch,
             'val_auc_bm': val_auc_bm,
             'val_acc_bm': val_acc_bm,
+            'val_acc_epoch_bm': val_acc_epoch_bm,
             'train_auc_bm': train_auc_bm,
             'train_acc_bm': train_acc_bm,
+            'train_loss_bm': train_loss_bm,
             'moving_val_auc_bm': max_auc,
             'training_time': training_time,
             'model_capacity': num_parameters,
@@ -274,180 +278,89 @@ def main(config):
         logger.info('training log data converted!')
 
         # update the run config file
-        config.save(config.run_config_fn)
+        save_as_json(vars(config), config.run_config_fn)
+        logger.info(f'run config saved to {config.run_config_fn}.')
 
-    # laod the best model and prepare for postprocessing
-    logger.info('\033[35;1mloading best model for postprocessing...\033[0m')
-    # best_model_path = f"{config.outdir}/model-{config.run_name}.pth"
+    # load the best model and prepare for final evaluation
+    logger.info('\033[35;1mloading best model for final evaluation...\033[0m')
     best_model_state_dict = torch.load(config.best_model_path, map_location='cpu', weights_only=True)
     model_without_ddp.load_state_dict(best_model_state_dict)
     assert all(torch.equal(p1, p2) for p1, p2 in zip(model.parameters(), model_without_ddp.parameters()))
     logger.info('finetune best model loaded!')
     my_model = model
 
-    # ! need to check the model type and device for distributed training
-    logger.info(type(my_model))
-    test_stats = evaluate(my_model, data_loader_test, device)[0]
-    fpr_val, tpr_val, val_auc_bm = auc_binary(my_model, data_loader_val, device=device)
-    fpr_test, tpr_test, test_auc_bm = auc_binary(my_model, data_loader_test, device=device)
-    test_acc_bm = test_stats['acc']
+    val_stats = evaluate(my_model, data_loader_val, device)
+    test_stats = evaluate(my_model, data_loader_test, device)
+    val_auc_states = auc_binary(my_model, data_loader_val, device=device, epoch_aggregation=True, verbose=True)
+    test_auc_states = auc_binary(my_model, data_loader_test, device=device, epoch_aggregation=True, verbose=True)
+    
+    test_acc_bm, test_acc_epoch = test_stats['acc'], test_stats['acc_epoch']
+    val_acc_bm, val_acc_epoch = val_stats['acc'], val_stats['acc_epoch']
     if misc.is_main_process():
-        logger.info(f'Selected model validation AUC: {val_auc_bm:.4f}')
-        logger.info(f'Selected model test AUC: {test_auc_bm:.4f}')
-        test_auc_bm_dict = {
+        message = ''.join([
+            '\n', '='*45, '\n',
+            "Selected model validation AUC on segment level: {:.4f}.\n".format(val_auc_states['roc_auc_seg']),
+            "Selected model validation AUC on epoch level: {:.4f}.\n".format(val_auc_states['roc_auc_epoch']),
+            "Selected model validation accuracy on segment level {:.4f}.\n".format(val_stats['acc']),
+            "Selected model validation accuracy on epoch level {:.4f}.\n\n".format(val_stats['acc_epoch']),
+            "Selected model test AUC on segment level: {:.4f}.\n".format(test_auc_states['roc_auc_seg']),
+            "Selected model test AUC on epoch level: {:.4f}.\n".format(test_auc_states['roc_auc_epoch']),
+            "Selected model test accuracy on segment level {:.4f}.\n".format(test_stats['acc']),
+            "Selected model test accuracy on epoch level {:.4f}.\n\n".format(test_stats['acc_epoch']),
+            '='*45, '\n',
+        ])
+        logger.info(message)
+        best_model_dict = {
+            'val_acc_bm': val_acc_bm,
+            'val_acc_epoch_bm': val_acc_epoch,
+            'val_auc_seg_bm': val_auc_states['roc_auc_seg'],
+            'val_auc_epoch_bm': val_auc_states['roc_auc_epoch'],
+            'fpr_val_seg': val_auc_states['fpr_seg'],
+            'tpr_val_seg': val_auc_states['tpr_seg'],
+            'fpr_val_epoch': val_auc_states['fpr_epoch'],
+            'tpr_val_epoch': val_auc_states['tpr_epoch'],
             'test_acc_bm': test_acc_bm,
-            'test_auc_bm': test_auc_bm,
-            'val_auc_bm': val_auc_bm,
-            'fpr_test': fpr_test,
-            'tpr_test': tpr_test,
-            'fpr_val': fpr_val,
-            'tpr_val': tpr_val,
+            'test_acc_epoch': test_acc_epoch,
+            'test_auc_seg': test_auc_states['roc_auc_seg'],
+            'test_auc_epoch': test_auc_states['roc_auc_epoch'],
+            'fpr_test_seg': test_auc_states['fpr_seg'],
+            'tpr_test_seg': test_auc_states['tpr_seg'],
+            'fpr_test_epoch': test_auc_states['fpr_epoch'],
+            'tpr_test_epoch': test_auc_states['tpr_epoch'],
         }
         run_log = Params(config.log_json_fn)
-        run_log.update(test_auc_bm_dict)
+        run_log.update(best_model_dict)
+        if config.wandb_enable:
+            wandb.summary.update({'val_auc_bm': val_auc_bm, 'test_auc_bm': test_auc_states['roc_auc_seg'],
+                                  'val_auc_bm_epoch': val_auc_states['roc_auc_epoch'], 'test_auc_bm_epoch': test_auc_states['roc_auc_epoch'],
+                                  'val_acc_bm': val_acc_bm, 'test_acc_bm': test_acc_bm,
+                                  'val_acc_epoch': val_acc_epoch, 'test_acc_epoch': test_acc_epoch})
 
-        wandb.summary.update({'val_auc_bm': val_auc_bm, 'test_auc_bm': test_auc_bm})
-
-    postprocessing(my_model, val_epochs, data_loader_val, device, config.set_name_val, config)
-    postprocessing(my_model, test_epochs, data_loader_test, device, config.set_name_test, config)
     if misc.is_main_process():
         plot_curves(config)
         train_summary(config)
 
-
+    if config.distributed:
+        misc.end_with_cleanup()
 
 if __name__ == '__main__':
 
-    # ------------------- project initialization -------------------
-    # job_name = 'Test'
-    # group_name = 'test'
+    config = get_args()
 
-    job_name = 'ModelTest'
-    # group_name = 'test'
-    # group_name = 'HRVTransformer'
-    # group_name = 'HrvResnet'
-    group_name = 'HrvConformer'
+    config.outdir = f'./log/{config.job_name}/{config.group_name}/{config.run_name}/'
+    os.makedirs(config.outdir, exist_ok=True)
+    config.log_fn = f'{config.outdir}/report-{config.run_name}.txt'
+    config.run_log_fn = f'{config.outdir}/run_log-{config.run_name}.json'
+    config.log_json_fn = f'{config.outdir}/log-{config.run_name}.json'
+    config.run_config_fn = f'{config.outdir}/run_config-{config.run_name}.json'
+    config.best_model_path = f"{config.outdir}/best_model-{config.run_name}.pth"
 
-    # job_name = 'ModelHyperTune'
-    # group_name = 'attn_heads'
-    # group_name = 'n_layer'
-    # group_name = 'kernel_size'
-    # group_name = 'patch_size'
-    # group_name = 'nuisances'
+    # config.resume = f'{config.outdir}/checkpoint.pth'
 
-    config_json_path = project_init(job_name, group_name)
-    config = Params(config_json_path)
+    logger = setup_logger(config.log_fn)
+
+    main(config)
 
 
-    # ------------------- run the model -------------------
-    def run(config):
 
-        run_name = time.strftime('%Y-%m-%d %H-%M-%S',time.localtime(int(time.time())))
-        config.run_name = f'{run_name} {config.num_run}'
-        # config.run_name = '2025-03-18 16-54-53 1'
-
-        config.outdir = f'{config.parent_dir}/{config.run_name}/'
-        os.makedirs(config.outdir, exist_ok=True)
-        config.log_fn = f'{config.outdir}/report-{config.run_name}.txt'
-        config.run_log_fn = f'{config.outdir}/run_log-{config.run_name}.json'
-        config.log_json_fn = f'{config.outdir}/log-{config.run_name}.json'
-        config.run_config_fn = f'{config.outdir}/run_config-{config.run_name}.json'
-        config.best_model_path = f"{config.outdir}/best_model-{config.run_name}.pth"
-
-        # config.resume = f'{config.outdir}/checkpoint.pth'
-
-        logger = setup_logger(config.log_fn)
-        
-        config.model_name = 'HrvConformer'
-        # config.model_name = 'HrvTransformer'
-        # config.model_name = 'HrvResnet'
-
-        config.seed = 32
-        config.epochs = 2000
-        config.print_freq = 100
-
-        # config.learning_rate = 3e-5
-        # config.lr_min = 1e-6
-        # config.warmup_epoch = 200
-        # config.lr_T0 = 60
-        # config.lr_Tmult = 2
-
-        # config.weight_decay = 0.05
-        config.dropout = 0.3
-        # config.beta1 = 0.85
-        # config.beta2 = 0.998
-
-        # # model parameters
-        # config.patch_size = 80
-        # config.d_model = 144
-        # config.num_attention_heads = 6
-        # config.n_layer = 3
-        # config.conv_kernel_size = 11
-        # config.fcn_head_kernel_size = 11
-
-        # config.min_max_enable = True
-        # config.batchsize = 1024
-        # config.num_workers = 2
-
-        hostname = socket.gethostname()
-        if hostname == 'inf-dev71':
-            hostname_alias = 'syuLinux'
-        elif hostname == 'infantwgb80':
-            hostname_alias = 'A10Linux'
-        else:
-            hostname_alias = hostname
-        run_notes = [
-            f'{config.model_name} test: n_layer: {config.n_layer}, random seed: {config.seed}, run on {hostname_alias} with copied env.',
-            f'beta1: {config.beta1}, d_model: {config.d_model}, fcn_head_kernel_size: {config.fcn_head_kernel_size}, fcn_head_kernel_size: {config.fcn_head_kernel_size}.',
-            f'dropout: {config.dropout}, weight decay: {config.weight_decay}, beta2: {config.beta2}, lr min: {config.lr_min:.2e}.',
-            f'randomly select 500 epochs for validation (before 20% od dev set: 561h), the rest for training.',
-            f'use cosine warmup scheduler, warmup epoch {config.warmup_epoch}, lr: {config.learning_rate}.',
-            'batchsize test: 1024, number of workers: 2.',
-            'use min-max normalization.',
-            'Load dataset from all ANSeR1&2 weak label group and ANSeR1&2 strong label group.',
-        ]
-        log_notes = '\n'.join(run_notes)
-        logger.info(f"\n{'='*45}\n{log_notes}\n{'='*45}\n")
-        config.notes = run_notes[:-1]
-
-        config.save(config.run_config_fn)
-        main(config)
-
-    # ------------------- tune hyperparameters -------------------
-    parser = argparse.ArgumentParser(description="Hyperparameter tuning script")
-    parser.add_argument("--param_name", type=str, 
-                        help="The name of the hyperparameter to tune.")
-    # Argument for hyperparameter values (comma-separated)
-    parser.add_argument("--values", type=str, 
-                        help="A comma-separated list of values to tune the parameter.")
-    args = parser.parse_args()
-
-    def tune_hyperparameters(config, param_name, values):
-        i = 0
-        for value in values:
-            i += 1
-            config.num_run = i
-            config.dict[param_name] = value
-            run(config)
-
-    def tune_multi_hyperparameters(param_dict):
-        run_i = 0
-        param_names = list(param_dict.keys())
-        values = list(param_dict.values())
-        for i in range(len(values[0])):
-            run_i += 1
-            config.num_run = run_i
-            for j, param_name in enumerate(param_names):
-                config.dict[param_name] = values[j][i]
-                # print(f'{param_name}: {values[j][i]}')
-            run(config)
-
-
-    if args.param_name and args.values:
-        # Convert comma-separated values to a list
-        values = [float(v) if '.' in v else int(v) for v in args.values.split(",")]
-        print(f"Hyperparameter tuning for {args.param_name} with values: {values}")
-        tune_hyperparameters(config, args.param_name, values)
-    else:
-        run(config)
     

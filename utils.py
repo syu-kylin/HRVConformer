@@ -8,6 +8,7 @@ import random
 import time
 from collections import deque, defaultdict
 from torch import distributed as dist
+import logging
 from misc import get_rank
 
 def setup_seed(seed):
@@ -19,7 +20,7 @@ def setup_seed(seed):
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
 
-
+logger = logging.getLogger('project_log')
 class CosineWarmupScheduler(torch.optim.lr_scheduler._LRScheduler):
     
     def __init__(self, optimizer, warmup, max_iters, eta_min=0):
@@ -32,7 +33,6 @@ class CosineWarmupScheduler(torch.optim.lr_scheduler._LRScheduler):
         lr_factor = self.get_lr_factor(epoch=self.last_epoch)
         # return [max(base_lr * lr_factor, self.eta_min) for base_lr in self.base_lrs]
         return [base_lr * lr_factor if self.last_epoch <= self.warmup else max(self.eta_min, base_lr * lr_factor) for base_lr in self.base_lrs]
-    
     
     def get_lr_factor(self, epoch):
         lr_factor = 0.5 * (1 + np.cos(np.pi * epoch / self.max_num_iters))
@@ -144,13 +144,17 @@ class NativeScalerWithGradNormCount:
         if update_grad:
             if clip_grad is not None:
                 assert parameters is not None
+                parameters = list(parameters)
                 self._scaler.unscale_(optimizer)  # unscale the gradients of optimizer's assigned params in-place
                 norm = torch.nn.utils.clip_grad_norm_(parameters, clip_grad)
+                post_norm = get_grad_norm_(parameters) # get the gradient norm after clipping
             else:
                 self._scaler.unscale_(optimizer)
                 norm = get_grad_norm_(parameters)
+                post_norm = norm
             self._scaler.step(optimizer)
             self._scaler.update()
+            return norm, post_norm
         else:
             norm = None
         return norm
@@ -174,9 +178,13 @@ def get_grad_norm_(parameters, norm_type: float = 2.0) -> torch.Tensor:
     '''
     if isinstance(parameters, torch.Tensor):
         parameters = [parameters]
+    else:
+        parameters = list(parameters)
+    # logger.debug(f'num parameters before check grad: {len(parameters)}')
     parameters = [p for p in parameters if p.grad is not None]
     norm_type = float(norm_type)
     if len(parameters) == 0:
+        # logger.warning('get_grad_norm_() called with no parameters that have gradients. Returning 0.')
         return torch.tensor(0.)
     device = parameters[0].grad.device
     if norm_type == float('inf'):
@@ -230,7 +238,7 @@ class Params():
         return self.__dict__
 
 
-def save_as_json(data_dict, file_path_and_name, write_enable):
+def save_as_json(data_dict, file_path_and_name):
     
     # Writing the JSON data to a file   
     # os.makedirs(folder_name, exist_ok=True)
@@ -238,9 +246,9 @@ def save_as_json(data_dict, file_path_and_name, write_enable):
     # print(folder_name)
     # data_log_path = f'{folder_name}/{file_name}.json'
     # print(data_log_path)
-    if bool(write_enable):
-        with open(file_path_and_name, 'w') as wf:
-            json.dump(obj=data_dict, fp=wf, indent=4)
+    # if bool(write_enable):
+    with open(file_path_and_name, 'w') as wf:
+        json.dump(obj=data_dict, fp=wf, indent=4)
 
 
 def get_structed_log(input_json_path, ignore_end=None):

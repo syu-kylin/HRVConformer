@@ -3,8 +3,10 @@
 # MAE: https://github.com/facebookresearch/mae
 # Deit: https://github.com/facebookresearch/deit
 # ----------------------------------------------
-
+import builtins
 import json
+import datetime
+import psutil
 import os
 import torch
 import numpy as np
@@ -170,7 +172,6 @@ class MetricLogger(object):
                     self.update(step_time=step_time, step_data_time=step_data_time, memory=memory)
                 else:
                     self.update(step_time=step_time, step_data_time=step_data_time)
-
             i += 1
             end = time.time()
         total_time = time.time() - start_time
@@ -203,6 +204,41 @@ def save_on_master(*args, **kwargs):
     if is_main_process():
         torch.save(*args, **kwargs)
 
+def end_with_cleanup():
+    """Ensure all processes finish NCCL operations before destroying process group."""
+    if is_dist_avail_and_initialized():
+        torch.distributed.barrier()  # Ensure all processes finish NCCL operations before destroying process group
+        dist.destroy_process_group()  # Safely shutdown distributed training
+        print("End with cleanup process group.")
+
+
+def memory_usage():
+    process = psutil.Process(os.getpid())
+    mem_process = process.memory_info().rss / (1024 ** 3)  # Memory in GB
+    mem_used = psutil.virtual_memory().used / (1024 ** 3)  # Memory in GB
+    mem_total = psutil.virtual_memory().total / (1024 ** 3)  # Memory in GB
+    mem_avail = psutil.virtual_memory().available / (1024 ** 3)  # Memory in GB
+    if is_main_process():
+        logger.info(f'\033[32;1mCPU memory usage:\033[0m current process/used: {mem_process:.2f}GB/{mem_used:.2f}GB, avail/total: {mem_avail:.2f}GB/{mem_total:.2f}GB.')
+
+
+def setup_for_distributed(is_master):
+    """
+    This function disables printing when not in master process
+    """
+    builtin_print = builtins.print
+
+    def print(*args, **kwargs):
+        force = kwargs.pop('force', False)
+        force = force or (get_world_size() > 8)
+        if is_master or force:
+            now = datetime.datetime.now().time()
+            formatted_time = now.strftime("%H:%M:%S")
+            builtin_print('[{}] '.format(formatted_time), end='')  # print with time stamp
+            builtin_print(*args, **kwargs)
+
+    builtins.print = print
+
 
 def init_distributed_mode(args):
     '''
@@ -215,7 +251,9 @@ def init_distributed_mode(args):
     # whther distributed training is being executed on a specific plateform, 
     # such as Infiniband Transport Protocol (ITP) (HPC Cluster) (Interl TPU)
     # or a custom interconnect for distributed communication.
-    
+    os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"  # or "DETAIL" for more logs
+    os.environ["OMP_NUM_THREADS"] = "6"    # how many CPU threads each process can use. Adjust based on your CPU cores
+
     # Program will be launched with MPI: (`mpirun` or `mpiexec`)
     if args.dist_on_itp:
         args.rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
@@ -249,12 +287,13 @@ def init_distributed_mode(args):
 
     torch.cuda.set_device(args.gpu)
     args.dist_backend = 'nccl'
-    logger.info('| distributed init (rank {}): {}, gpu {}'.format(
-        args.rank, args.dist_url, args.gpu), flush=True)
+    print('| distributed init (rank {}): {}, gpu {}'.format(
+        args.rank, args.dist_url, args.gpu))
     torch.distributed.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                          world_size=args.world_size, rank=args.rank)
-    torch.distributed.barrier()
-    # setup_for_distributed(args.rank == 0)
+    device_id = torch.cuda.current_device()
+    torch.distributed.barrier(device_ids=[device_id])
+    setup_for_distributed(args.rank == 0)
 
 
 def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler, lr_scheduler, best=False):

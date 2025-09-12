@@ -1,20 +1,13 @@
-'''
-Author: syu-kylin 79462188+syu-kylin@users.noreply.github.com
-Date: 2024-06-24 13:49:59
-LastEditors: syu-kylin
-LastEditTime: 2024-08-18 20:17:26
-FilePath: \4d-HIE-HRV Delphi\data_loader.py
-Description: 
-
-Copyright (c) 2024 by ${git_name_email}, All Rights Reserved. 
-'''
 
 import numpy as np
 import pandas as pd
 import random
 import scipy.io as scio    # read .mat file
 from scipy import signal
+from sklearn.model_selection import GroupShuffleSplit, GroupKFold
+import pickle
 import logging
+import socket
 
 import torch
 from torch.utils.data import TensorDataset, Dataset
@@ -23,29 +16,28 @@ from torch.utils.data import random_split
 from torch.utils.data import SubsetRandomSampler
 
 from utils import Params
-from project_init import project_init
+from project_init import get_args
 
 logger = logging.getLogger('project_log')
 
-def read_split_data(window_length, seed_epoch):
-    """ Read the rr struct file and split them as train and validation set.
+hostname = socket.gethostname()
+if hostname in ('adagpu01', 'adahead') :
+    home_dir = '/home/shuwenyu/Files'
+else:
+    home_dir = '/mnt/files' 
+
+def read_dev_test_data(window_length):
+    """ Read different group of rr struct file prepare for the development and test set.
     Args:
         #window_length(int or str): the window length of the rr in mins (2 or 5).
-        #seed_epoch(int): a random seed to make the split train and val epoch id reproduce.
     Return:
-        train_epochs(np struct): split train epochs.
-        val_epochs(np struct): split train epochs.
+        train_epochs(np struct): train epochs.
+        test_epochs(np struct): test epochs.
     """
-
     # 1). read the rr struct file
-    # home_dir = '/home/shuwenyu'
-    home_dir = '/mnt/files'
     data_dir = '{}/Datasets/Delphi/RPeaks/{}mins'.format(home_dir, window_length)
-    train_dataset_name = ['ANSeR1_weak_7-11h', 'ANSeR1_weak_13-23h', 'ANSeR1_weak_25-35h', 'ANSeR1_weak_37-47h',  
-                          'ANSeR2_weak_7-11h', 'ANSeR2_weak_13-23h', 'ANSeR2_weak_25-35h', 'ANSeR2_weak_37-47h', 
+    train_dataset_name = ['ANSeR2_weak_7-11h', 'ANSeR2_weak_13-23h', 'ANSeR2_weak_25-35h', 'ANSeR2_weak_37-47h', 
                           'ANSeR2_strong_6-48h']
-    # train_dataset_name = ['ANSeR2_weak_7-11h', 'ANSeR2_weak_13-23h', 'ANSeR2_weak_25-35h', 'ANSeR2_weak_37-47h', 
-    #                       'ANSeR2_strong_6-48h']
     test_dataset_name = ['ANSeR1_strong_6-48h']
     NN_epochs_dev_lst, NN_epochs_test_lst = [], []
 
@@ -98,11 +90,29 @@ def read_split_data(window_length, seed_epoch):
         rr_epoch = NN_epochs_test[i]['rr_epochs']
 
         NN_epochs_test_org[i] = (file_id, rr_epoch, grade, n_epoch)
-        
+
+    logger.info(f'\033[32;1mRead {N_files_dev} training epochs and {N_epochs_test} test epochs.\033[0m')
+
+    return NN_epochs_dev_org, NN_epochs_test_org
+
+def read_split_data(window_length, seed_epoch, train_epoch_ratio=1.0):
+    """ Read the rr struct file and split them as train and validation set.
+    Args:
+        #window_length(int or str): the window length of the rr in mins (2 or 5).
+        #seed_epoch(int): a random seed to make the split train and val epoch id reproduce.
+    Return:
+        train_epochs(np struct): split train epochs.
+        val_epochs(np struct): split train epochs.
+    """
+    # 1). read the rr struct file        
+    NN_epochs_dev_org, NN_epochs_test_org = read_dev_test_data(window_length)
+    N_files_dev = len(NN_epochs_dev_org)
+    N_epochs_test = len(NN_epochs_test_org)
+
     # 3). split train and validation set
     random.seed(seed_epoch)
-    valid_epochs_idx = random.sample(range(N_files_dev), 500)
-    # valid_epochs_idx = random.sample(range(N_files_dev), int(N_files_dev*0.2))
+    # valid_epochs_idx = random.sample(range(N_files_dev), 500)
+    valid_epochs_idx = random.sample(range(N_files_dev), int(N_files_dev*0.2))
     # print(f'validation set epoch ids:\n {valid_epochs_idx}')
 
     val_epochs = NN_epochs_dev_org[valid_epochs_idx]
@@ -110,18 +120,32 @@ def read_split_data(window_length, seed_epoch):
     train_epochs = np.delete(NN_epochs_dev_org, valid_epochs_idx)
     test_epochs = NN_epochs_test_org
 
+    if train_epoch_ratio < 1.0:
+        logger.info(f'\033[32;1mUsing {train_epoch_ratio*100:.1f}% of the training data.\033[0m')
+        # Randomly select a subset of the training epochs
+        valid_train_epochs_idx = random.sample(range(len(train_epochs)), int(len(train_epochs)*train_epoch_ratio))
+        train_epochs = train_epochs[valid_train_epochs_idx]
+
+    # Extract unique baby IDs from train, validation, and test sets
+    dev_babies = sorted(set(fid.split('_')[0] for fid in NN_epochs_dev_org['file_id']))
+    train_babies = sorted(set(fid.split('_')[0] for fid in train_epochs['file_id']))
+    val_babies = sorted(set(fid.split('_')[0] for fid in val_epochs['file_id']))
+    test_babies = sorted(set(fid.split('_')[0] for fid in test_epochs['file_id']))
+
     message = ''.join([
-        '-'*45, '\n', 'Data preprocessing\n\n',
-        f'Number of 1h epoch files on development set: {N_files_dev}\n',
-        f'Number of 1h epoch files on test set: {len(NN_epochs_test)}\n',
+        '-'*45, '\n', '\033[35;1mepoch-independent data spliting\033[0m\n\n',
+        f'Randomly select 20% of one-hour epoch from the development set as validation set.\n',
+        f'development set include {len(dev_babies)} babies {N_files_dev} one-hour epochs.\n',
+        f'train set include {len(train_babies)} babies {len(train_epochs)} one-hour epochs.\n',
+        f'validation set include {len(val_babies)} babies {len(val_epochs)} one-hour epochs.\n',
+        f'test set include {len(test_babies)} babies {len(test_epochs)} one-hour epochs.\n\n',
         f'validation set epoch indexs:\n{valid_epochs_idx}\n\n',
-        f'Number of 1h epoch from train set: {len(train_epochs)}\n',
-        f'Number of 1h epoch from validation set {len(val_epochs)}\n',
-        f'Number of 1h epoch from test set: {len(test_epochs)}\n\n',
+        '-'*45, '\n',
     ])
     logger.info(message)
 
     return train_epochs, val_epochs, test_epochs
+
 
 class NormalizeAndToTensor:
     def __init__(self, mean: float=0.0, std: float=0.0,
@@ -171,7 +195,7 @@ class NormalizeAndToTensor:
 class SignalDataset(Dataset):
 
     def __init__(self, epoch_struct, set_name, transform=None):
-        self.data, self.labels = self.build_sampleset(epoch_struct, set_name)
+        self.data, self.labels, self.file_ids = self.build_sampleset(epoch_struct, set_name)
         self.transform = transform
 
     def build_sampleset(self, epoch_struct, set_name):
@@ -228,7 +252,7 @@ class SignalDataset(Dataset):
         ])
         logger.info(message)
 
-        return rr_data, labels
+        return rr_data, labels, file_ids
     
     def __len__(self):
         return len(self.data)
@@ -236,40 +260,19 @@ class SignalDataset(Dataset):
     def __getitem__(self, idx):
         sample = self.data[idx]
         label = self.labels[idx]
+        file_id = self.file_ids[idx]
 
         sample = np.expand_dims(sample, axis=0)
         # print(f'Sample shape before transform: {sample.shape}, dtype: {sample.dtype}')
         if self.transform:
             sample, label = self.transform(sample, label)
         # print(f'Sample shape after transform: {sample.shape}, dtype: {sample.dtype}')
-        return sample, label
+        return sample, label, file_id
 
 
 
 
 if __name__ == "__main__":
 
-    job_name = 'Test'
-    group_name = 'test'
-    # config_json_path = '../log/4d-HRV ANSeR//HrvConfermer/{}/{}//project_init_config.json'.format(job_name, group_name)
-
-    config_json_path = project_init(job_name, group_name)
-    config = Params(config_json_path)
-
-    logging.basicConfig(level=logging.DEBUG,
-                    format='%(levelname)s - %(message)s',
-                    # filemode='w',
-                    # filename=f'RPeaks_stats.log',
-                    # filename=f'RPeaks_stats_whole.log'
-                    )
-
-    window_length, seed_epoch = config.window_length, config.seed_epoch
-    train_epochs, val_epochs, test_epochs = read_split_data(window_length, seed_epoch)
-    signal_transform = NormalizeAndToTensor(mean=config.mean, std=config.std, 
-                                                    min=config.min, max=config.max, 
-                                                    min_max_enable=config.min_max_enable)    
-    train_dataset = SignalDataset(train_epochs, 'train', signal_transform)
-    val_dataset = SignalDataset(val_epochs, 'validation', signal_transform)
-    test_dataset = SignalDataset(test_epochs, 'test', signal_transform)
-
+    pass
     

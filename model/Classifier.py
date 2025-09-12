@@ -84,7 +84,7 @@ class MLP_CLS(nn.Module):
             # nn.LayerNorm(d_model),
             nn.BatchNorm1d(d_model),
             nn.Linear(d_model, n_class),
-            nn.ReLU(),
+            # nn.ReLU(),
             nn.Dropout(dropout),
         )
 
