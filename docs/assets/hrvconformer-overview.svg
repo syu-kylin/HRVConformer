@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="590" viewBox="0 0 1200 590" role="img" aria-labelledby="title desc">
+  <title id="title">HRVConformer processing and evaluation pipeline</title>
+  <desc id="desc">Noisy neonatal ECG is processed with the enhanced Pan-Tompkins algorithm, converted to interpolated NN intervals and five-minute windows, passed through patch projection and three Conformer blocks, and aggregated into one-hour epoch predictions.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .title { font: 700 28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .stage { font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1.2px; fill: #475569; }
+      .node-title { font: 700 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; text-anchor: middle; }
+      .node-detail { font: 400 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; text-anchor: middle; }
+      .small { font: 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; text-anchor: middle; }
+      .arrow { stroke: #475569; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .data { fill: #e0f2fe; stroke: #0284c7; stroke-width: 1.7; }
+      .prep { fill: #dcfce7; stroke: #16a34a; stroke-width: 1.7; }
+      .model { fill: #ede9fe; stroke: #7c3aed; stroke-width: 1.7; }
+      .output { fill: #fef3c7; stroke: #d97706; stroke-width: 1.7; }
+      .frame { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.2; }
+      .cohort-dev { fill: #eff6ff; stroke: #3b82f6; stroke-width: 1.4; }
+      .cohort-test { fill: #fff7ed; stroke: #f97316; stroke-width: 1.4; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="590" rx="18" fill="#ffffff"/>
+  <text class="title" x="44" y="48">HRVConformer: from neonatal ECG to one-hour HIE prediction</text>
+  <text class="subtitle" x="44" y="76">Primary configuration reported in the under-review manuscript</text>
+
+  <text class="stage" x="44" y="116">SIGNAL PREPARATION</text>
+  <rect class="data" x="44" y="136" width="178" height="94" rx="12"/>
+  <text class="node-title" x="133" y="172">Noisy ECG</text>
+  <text class="node-detail" x="133" y="197">ANSeR recordings</text>
+  <text class="node-detail" x="133" y="216">250 or 256 Hz</text>
+
+  <path class="arrow" d="M222 183 H263"/>
+  <rect class="prep" x="270" y="136" width="205" height="94" rx="12"/>
+  <text class="node-title" x="372.5" y="166">Enhanced</text>
+  <text class="node-title" x="372.5" y="188">Pan-Tompkins</text>
+  <text class="node-detail" x="372.5" y="213">R-peak detection</text>
+
+  <path class="arrow" d="M475 183 H516"/>
+  <rect class="prep" x="523" y="136" width="178" height="94" rx="12"/>
+  <text class="node-title" x="612" y="172">NN intervals</text>
+  <text class="node-detail" x="612" y="197">quality filtering</text>
+  <text class="node-detail" x="612" y="216">and correction</text>
+
+  <path class="arrow" d="M701 183 H742"/>
+  <rect class="prep" x="749" y="136" width="178" height="94" rx="12"/>
+  <text class="node-title" x="838" y="172">Interpolation</text>
+  <text class="node-detail" x="838" y="197">4 Hz sequence</text>
+  <text class="node-detail" x="838" y="216">dataset normalization</text>
+
+  <path class="arrow" d="M927 183 H968"/>
+  <rect class="data" x="975" y="136" width="181" height="94" rx="12"/>
+  <text class="node-title" x="1065.5" y="172">5-min windows</text>
+  <text class="node-detail" x="1065.5" y="197">1,200 samples</text>
+  <text class="node-detail" x="1065.5" y="216">overlapping segments</text>
+
+  <path class="arrow" d="M1065 230 V275 H170 V305"/>
+
+  <text class="stage" x="44" y="286">HRVCONFORMER</text>
+  <rect class="model" x="44" y="305" width="210" height="112" rx="12"/>
+  <text class="node-title" x="149" y="341">Patch projection</text>
+  <text class="node-detail" x="149" y="368">Conv1D, 25-s patches</text>
+  <text class="node-detail" x="149" y="390">12 tokens × 144 features</text>
+
+  <path class="arrow" d="M254 361 H295"/>
+  <rect class="model" x="302" y="287" width="375" height="148" rx="12"/>
+  <text class="node-title" x="489.5" y="318">3 × Conformer block</text>
+  <rect class="frame" x="326" y="338" width="72" height="66" rx="8"/>
+  <text class="small" x="362" y="366">½ FFN</text>
+  <text class="small" x="362" y="385">SiLU</text>
+  <path class="arrow" d="M398 371 H422"/>
+  <rect class="frame" x="428" y="338" width="86" height="66" rx="8"/>
+  <text class="small" x="471" y="361">Relative</text>
+  <text class="small" x="471" y="380">MHSA</text>
+  <path class="arrow" d="M514 371 H538"/>
+  <rect class="frame" x="544" y="338" width="86" height="66" rx="8"/>
+  <text class="small" x="587" y="361">Depthwise</text>
+  <text class="small" x="587" y="380">Conv1D</text>
+  <text class="small" x="489.5" y="425">Macaron residual structure with normalization</text>
+
+  <path class="arrow" d="M677 361 H718"/>
+  <rect class="model" x="725" y="305" width="178" height="112" rx="12"/>
+  <text class="node-title" x="814" y="343">FCN head</text>
+  <text class="node-detail" x="814" y="370">kernel size 11</text>
+  <text class="node-detail" x="814" y="392">2 class logits</text>
+
+  <path class="arrow" d="M903 361 H944"/>
+  <rect class="output" x="951" y="305" width="205" height="112" rx="12"/>
+  <text class="node-title" x="1053.5" y="341">Window prediction</text>
+  <text class="node-detail" x="1053.5" y="368">normal/mild vs.</text>
+  <text class="node-detail" x="1053.5" y="389">moderate-severe/inactive</text>
+
+  <path class="arrow" d="M1054 417 V468 H824"/>
+  <text class="stage" x="44" y="493">ONE-HOUR EVALUATION</text>
+  <rect class="output" x="302" y="466" width="522" height="86" rx="12"/>
+  <text class="node-title" x="563" y="497">Group windows by one-hour epoch identifier</text>
+  <text class="node-detail" x="563" y="523">Majority vote → accuracy   |   mean class-1 probability → ROC-AUC</text>
+
+  <rect class="cohort-dev" x="44" y="514" width="218" height="38" rx="9"/>
+  <text class="small" x="153" y="538">ANSeR2: train + validation</text>
+  <rect class="cohort-test" x="864" y="466" width="292" height="86" rx="12"/>
+  <text class="node-title" x="1010" y="499">Independent test</text>
+  <text class="node-detail" x="1010" y="524">ANSeR1 expert-labelled epochs</text>
+  <path class="arrow" d="M824 509 H857"/>
+</svg>

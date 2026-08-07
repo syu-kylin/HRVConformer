@@ -18,7 +18,7 @@ import misc
 from utils import Params, CosineWarmupScheduler, CosineWarmupRestartsScheduler, setup_seed
 from data_loader import SignalDataset, NormalizeAndToTensor, ComposeRR, RRAugment
 from data_loader import split_baby_independent, read_split_data
-from model.ConformerNet import confermer_net
+from model.ConformerNet import hrvconformer
 from utils import NativeScalerWithGradNormCount as NativeScaler
 from train_func import train_one_epoch, evaluate
 from matrix import auc_binary
@@ -38,7 +38,12 @@ def main(config):
 
     # Load data
     misc.memory_usage()
-    train_epochs, val_epochs, test_epochs = read_split_data(config.window_length, config.seed_epoch, config.train_epochs_ratio)
+    train_epochs, val_epochs, test_epochs = read_split_data(
+        config.window_length,
+        config.seed_epoch,
+        config.train_epochs_ratio,
+        data_root=config.data_root,
+    )
     signal_transform = NormalizeAndToTensor(mean=config.mean, std=config.std, 
                                             min=config.min, max=config.max, 
                                             min_max_enable=config.min_max_enable) 
@@ -71,17 +76,17 @@ def main(config):
 
     data_loader_train = DataLoader(
         train_dataset, batch_size=config.batchsize, sampler=sampler_train,
-        num_workers=config.num_workers, pin_memory=True, drop_last=True)
+        num_workers=config.num_workers, pin_memory=config.pin_memory, drop_last=True)
     data_loader_val = DataLoader(
         val_dataset, batch_size=config.batchsize, sampler=sampler_val,
-        num_workers=config.num_workers, pin_memory=True, drop_last=False)
+        num_workers=config.num_workers, pin_memory=config.pin_memory, drop_last=False)
     data_loader_test = DataLoader(
         test_dataset, batch_size=config.batchsize, sampler=sampler_test,
-        num_workers=config.num_workers, pin_memory=True, drop_last=False)
+        num_workers=config.num_workers, pin_memory=config.pin_memory, drop_last=False)
     misc.memory_usage()
 
     # Load model
-    model = confermer_net(config).to(device)
+    model = hrvconformer(config).to(device)
     model_without_ddp = model
     logger.info(f'\033[35;1mmodel initialized with {model.__class__.__name__}!\033[0m')
 
@@ -158,7 +163,7 @@ def main(config):
             model, data_loader_train, loss_func, optimizer, scaler, device, epoch, config)
         lr_scheduler.step()
 
-        if (epoch % 20 == 0 or (epoch + 1) == config.epochs):
+        if config.save_model and (epoch % 20 == 0 or (epoch + 1) == config.epochs):
             misc.save_model(
                 args=config, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                 loss_scaler=scaler, lr_scheduler=lr_scheduler, epoch=epoch) 
@@ -347,20 +352,18 @@ if __name__ == '__main__':
 
     config = get_args()
 
-    config.outdir = f'./log/{config.job_name}/{config.group_name}/{config.run_name}/'
+    if not config.run_name:
+        config.run_name = time.strftime('%Y%m%d_%H%M%S', time.localtime())
+    config.outdir = os.path.join(config.outdir, config.job_name, config.group_name, config.run_name)
     os.makedirs(config.outdir, exist_ok=True)
-    config.log_fn = f'{config.outdir}/report-{config.run_name}.txt'
-    config.run_log_fn = f'{config.outdir}/run_log-{config.run_name}.json'
-    config.log_json_fn = f'{config.outdir}/log-{config.run_name}.json'
-    config.run_config_fn = f'{config.outdir}/run_config-{config.run_name}.json'
-    config.best_model_path = f"{config.outdir}/best_model-{config.run_name}.pth"
+    config.log_fn = os.path.join(config.outdir, f'report-{config.run_name}.txt')
+    config.run_log_fn = os.path.join(config.outdir, f'run_log-{config.run_name}.json')
+    config.log_json_fn = os.path.join(config.outdir, f'log-{config.run_name}.json')
+    config.run_config_fn = os.path.join(config.outdir, f'run_config-{config.run_name}.json')
+    config.best_model_path = os.path.join(config.outdir, f'best_model-{config.run_name}.pth')
 
     # config.resume = f'{config.outdir}/checkpoint.pth'
 
     logger = setup_logger(config.log_fn)
 
     main(config)
-
-
-
-    

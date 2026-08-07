@@ -1,6 +1,31 @@
-/log/** 
-**/__pycache__/**
-/.vscode/**
-/wandb/**
-**/*.log
-/splits/** 
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# IDE and OS
+.DS_Store
+.idea/
+.vscode/
+
+# Experiment outputs and tracking
+log/
+logs/
+wandb/
+*.log
+
+# Clinical/derived data and model artifacts
+data/
+datasets/
+*.mat
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.pt
+*.pth
+*.ckpt
+
+# Local PDF-review scratch files
+tmp/

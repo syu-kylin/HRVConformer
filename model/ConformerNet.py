@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import logging
 from model.ConformerBlock import ConformerBlock, PositionEncoding
-from Classifier import MLP_head, FCN_head, MLP_glob_pool_head, MLP_CLS
+from model.Classifier import MLP_head, FCN_head, MLP_glob_pool_head, MLP_CLS
 
 
 logger = logging.getLogger('project_log')
@@ -11,20 +11,20 @@ class ConformerNet(nn.Module):
     '''
 
     def __init__(self, input_dim: int = 1200,
-                 patch_size: int = 80,
+                 patch_size: int = 100,
                  d_model: int = 144, 
-                 num_layers: int = 2,
+                 num_layers: int = 3,
                  ff_dim_factor: int = 4,
-                 num_attention_heads: int = 6,
+                 num_attention_heads: int = 8,
                  attention_type: str = 'RelativePositionBias',
                  fixed_position_embedding: bool = False,
                  feedford_dropout: float = 0.0,
                  attention_dropout: float = 0.0, 
                  pos_encode_dropout: float = 0.0,
                  conv_dropout: float = 0.0, 
-                 conv_kernel_size: int = 31,
+                 conv_kernel_size: int = 11,
                  classifier_head: str = 'fcn',
-                 fcn_head_kernel_size: int = 3,
+                 fcn_head_kernel_size: int = 11,
                  mlp_hid_dim: int = 200, 
                  mlp_dropout: float = 0.0,
                  n_class: int = 2, 
@@ -153,7 +153,7 @@ def init_weights(module):
         nn.init.ones_(module.weight)
        
             
-def confermer_net(config):
+def hrvconformer(config):
     model_config = {
         'input_dim': config.input_dim, 'patch_size': config.patch_size,
         'd_model': config.d_model, 'num_layers': config.n_layer, 'attention_type':config.attention_type,
@@ -168,9 +168,13 @@ def confermer_net(config):
     return ConformerNet(**model_config)
 
 
+# Backward-compatible alias for earlier experiment scripts.
+confermer_net = hrvconformer
+
+
 if __name__ == "__main__":
     
-    confermerNet = ConformerNet()
+    confermerNet = ConformerNet(patch_size=100)
     # x = torch.randn(2, 15, 80)
     x = torch.randn(2, 1, 1200)
     y = confermerNet(x)

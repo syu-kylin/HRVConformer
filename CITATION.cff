@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the HRVConformer preprint."
+title: "HRVConformer"
+type: software
+authors:
+  - family-names: Yu
+    given-names: Shuwen
+repository-code: "https://github.com/syu-kylin/HRVConformer"
+url: "https://github.com/syu-kylin/HRVConformer"
+license: MIT
+keywords:
+  - heart rate variability
+  - hypoxic-ischemic encephalopathy
+  - Conformer
+  - weak supervision
+  - medical time series
+preferred-citation:
+  type: article
+  title: "HRVConformer: Neonatal Hypoxic-Ischemic Encephalopathy Classification from the Heart Rate signals"
+  authors:
+    - family-names: Yu
+      given-names: Shuwen
+    - family-names: Marnane
+      given-names: William P.
+    - family-names: Boylan
+      given-names: Geraldine B.
+    - family-names: Lightbody
+      given-names: Gordon
+  year: 2026
+  doi: "10.48550/arXiv.2605.26190"
+  url: "https://arxiv.org/abs/2605.26190"

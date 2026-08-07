@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc">
+  <title id="title">Independent ANSeR1 test performance across four models</title>
+  <desc id="desc">Two dot-and-whisker panels compare one-hour epoch-level accuracy and ROC-AUC for HRVConformer, FCN19, HRVTransformer, and HRVRes50. HRVConformer has the highest reported mean on both metrics.</desc>
+  <defs>
+    <style>
+      .title { font: 700 28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .panel-title { font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .label { font: 600 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+      .label-strong { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1d4ed8; }
+      .tick { font: 400 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748b; text-anchor: middle; }
+      .value { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+      .value-strong { font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1d4ed8; }
+      .footnote { font: 400 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .grid { stroke: #e2e8f0; stroke-width: 1; }
+      .axis { stroke: #94a3b8; stroke-width: 1.2; }
+      .whisker { stroke: #64748b; stroke-width: 3; stroke-linecap: round; }
+      .whisker-strong { stroke: #2563eb; stroke-width: 4; stroke-linecap: round; }
+      .cap { stroke: #64748b; stroke-width: 2; }
+      .cap-strong { stroke: #2563eb; stroke-width: 2.5; }
+      .dot { fill: #64748b; stroke: #ffffff; stroke-width: 2; }
+      .dot-strong { fill: #2563eb; stroke: #ffffff; stroke-width: 2.5; }
+      .frame { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.2; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="650" rx="18" fill="#ffffff"/>
+  <text class="title" x="44" y="48">Independent ANSeR1 test performance</text>
+  <text class="subtitle" x="44" y="76">One-hour epoch level · mean ± SD over 10 matched runs</text>
+
+  <!-- Accuracy panel: x = 200 + (value - 0.62) / 0.18 * 340 -->
+  <rect class="frame" x="44" y="112" width="536" height="430" rx="12"/>
+  <text class="panel-title" x="68" y="147">Accuracy</text>
+  <line class="grid" x1="200" y1="170" x2="200" y2="475"/>
+  <line class="grid" x1="294.4" y1="170" x2="294.4" y2="475"/>
+  <line class="grid" x1="388.9" y1="170" x2="388.9" y2="475"/>
+  <line class="grid" x1="483.3" y1="170" x2="483.3" y2="475"/>
+  <line class="axis" x1="200" y1="475" x2="540" y2="475"/>
+  <text class="tick" x="200" y="498">0.62</text>
+  <text class="tick" x="294.4" y="498">0.67</text>
+  <text class="tick" x="388.9" y="498">0.72</text>
+  <text class="tick" x="483.3" y="498">0.77</text>
+
+  <text class="label-strong" x="68" y="212">HRVConformer</text>
+  <line class="whisker-strong" x1="406.9" y1="207" x2="467.3" y2="207"/>
+  <line class="cap-strong" x1="406.9" y1="198" x2="406.9" y2="216"/>
+  <line class="cap-strong" x1="467.3" y1="198" x2="467.3" y2="216"/>
+  <circle class="dot-strong" cx="437.1" cy="207" r="8"/>
+  <text class="value-strong" x="447" y="192">0.7456 ± 0.016</text>
+
+  <text class="label" x="68" y="282">FCN19</text>
+  <line class="whisker" x1="350.1" y1="277" x2="418.1" y2="277"/>
+  <line class="cap" x1="350.1" y1="269" x2="350.1" y2="285"/>
+  <line class="cap" x1="418.1" y1="269" x2="418.1" y2="285"/>
+  <circle class="dot" cx="384.1" cy="277" r="7"/>
+  <text class="value" x="394" y="262">0.7177 ± 0.018</text>
+
+  <text class="label" x="68" y="352">HRVRes50</text>
+  <line class="whisker" x1="343.3" y1="347" x2="381.1" y2="347"/>
+  <line class="cap" x1="343.3" y1="339" x2="343.3" y2="355"/>
+  <line class="cap" x1="381.1" y1="339" x2="381.1" y2="355"/>
+  <circle class="dot" cx="362.2" cy="347" r="7"/>
+  <text class="value" x="372" y="332">0.7060 ± 0.010</text>
+
+  <text class="label" x="68" y="422">HRVTransformer</text>
+  <line class="whisker" x1="232.2" y1="417" x2="417.3" y2="417"/>
+  <line class="cap" x1="232.2" y1="409" x2="232.2" y2="425"/>
+  <line class="cap" x1="417.3" y1="409" x2="417.3" y2="425"/>
+  <circle class="dot" cx="324.7" cy="417" r="7"/>
+  <text class="value" x="334" y="402">0.6860 ± 0.049</text>
+
+  <!-- ROC-AUC panel: x = 786 + (value - 0.74) / 0.12 * 340 -->
+  <rect class="frame" x="620" y="112" width="536" height="430" rx="12"/>
+  <text class="panel-title" x="644" y="147">ROC-AUC</text>
+  <line class="grid" x1="776" y1="170" x2="776" y2="475"/>
+  <line class="grid" x1="860.9" y1="170" x2="860.9" y2="475"/>
+  <line class="grid" x1="945.9" y1="170" x2="945.9" y2="475"/>
+  <line class="grid" x1="1030.8" y1="170" x2="1030.8" y2="475"/>
+  <line class="grid" x1="1115.8" y1="170" x2="1115.8" y2="475"/>
+  <line class="axis" x1="776" y1="475" x2="1116" y2="475"/>
+  <text class="tick" x="776" y="498">0.74</text>
+  <text class="tick" x="860.9" y="498">0.77</text>
+  <text class="tick" x="945.9" y="498">0.80</text>
+  <text class="tick" x="1030.8" y="498">0.83</text>
+  <text class="tick" x="1115.8" y="498">0.86</text>
+
+  <text class="label-strong" x="644" y="212">HRVConformer</text>
+  <line class="whisker-strong" x1="1009" y1="207" x2="1065.7" y2="207"/>
+  <line class="cap-strong" x1="1009" y1="198" x2="1009" y2="216"/>
+  <line class="cap-strong" x1="1065.7" y1="198" x2="1065.7" y2="216"/>
+  <circle class="dot-strong" cx="1037.4" cy="207" r="8"/>
+  <text class="value-strong" x="986" y="190">0.8323 ± 0.010</text>
+
+  <text class="label" x="644" y="282">FCN19</text>
+  <line class="whisker" x1="927.9" y1="277" x2="984.6" y2="277"/>
+  <line class="cap" x1="927.9" y1="269" x2="927.9" y2="285"/>
+  <line class="cap" x1="984.6" y1="269" x2="984.6" y2="285"/>
+  <circle class="dot" cx="956.3" cy="277" r="7"/>
+  <text class="value" x="966" y="262">0.8034 ± 0.010</text>
+
+  <text class="label" x="644" y="352">HRVTransformer</text>
+  <line class="whisker" x1="765.9" y1="347" x2="1003.9" y2="347"/>
+  <line class="cap" x1="765.9" y1="339" x2="765.9" y2="355"/>
+  <line class="cap" x1="1003.9" y1="339" x2="1003.9" y2="355"/>
+  <circle class="dot" cx="884.9" cy="347" r="7"/>
+  <text class="value" x="895" y="332">0.7785 ± 0.042</text>
+
+  <text class="label" x="644" y="422">HRVRes50</text>
+  <line class="whisker" x1="859.9" y1="417" x2="899.6" y2="417"/>
+  <line class="cap" x1="859.9" y1="409" x2="859.9" y2="425"/>
+  <line class="cap" x1="899.6" y1="409" x2="899.6" y2="425"/>
+  <circle class="dot" cx="879.7" cy="417" r="7"/>
+  <text class="value" x="890" y="402">0.7766 ± 0.007</text>
+
+  <text class="footnote" x="44" y="584">Whiskers show ±1 standard deviation, not confidence intervals. Higher is better.</text>
+  <text class="footnote" x="44" y="608">Source: under-review manuscript, Table 4. Validation data were used for model development; ANSeR1 was reserved for final testing.</text>
+</svg>

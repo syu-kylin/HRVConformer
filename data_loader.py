@@ -7,7 +7,8 @@ from scipy import signal
 from sklearn.model_selection import GroupShuffleSplit, GroupKFold
 import pickle
 import logging
-import socket
+import os
+from pathlib import Path
 
 import torch
 from torch.utils.data import TensorDataset, Dataset
@@ -20,13 +21,21 @@ from project_init import get_args
 
 logger = logging.getLogger('project_log')
 
-hostname = socket.gethostname()
-if hostname in ('adagpu01', 'adahead') :
-    home_dir = '/home/shuwenyu/Files'
-else:
-    home_dir = '/mnt/files' 
+def _resolve_data_root(data_root=None):
+    """Return the configured preprocessed-data root or fail with guidance."""
+    configured_root = data_root or os.environ.get('HRVCONFORMER_DATA_ROOT')
+    if not configured_root:
+        raise FileNotFoundError(
+            'No data root was configured. Pass --data_root /path/to/RPeaks or set '
+            'HRVCONFORMER_DATA_ROOT. See DATA.md for the expected private dataset layout.'
+        )
+    root = Path(configured_root).expanduser().resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f'Configured data root does not exist or is not a directory: {root}')
+    return root
 
-def read_dev_test_data(window_length):
+
+def read_dev_test_data(window_length, data_root=None):
     """ Read different group of rr struct file prepare for the development and test set.
     Args:
         #window_length(int or str): the window length of the rr in mins (2 or 5).
@@ -35,7 +44,12 @@ def read_dev_test_data(window_length):
         test_epochs(np struct): test epochs.
     """
     # 1). read the rr struct file
-    data_dir = '{}/Datasets/Delphi/RPeaks/{}mins'.format(home_dir, window_length)
+    data_dir = _resolve_data_root(data_root) / f'{window_length}mins'
+    if not data_dir.is_dir():
+        raise FileNotFoundError(
+            f'Expected a preprocessed window directory at {data_dir}. '
+            'See DATA.md for the required filenames.'
+        )
     train_dataset_name = ['ANSeR2_weak_7-11h', 'ANSeR2_weak_13-23h', 'ANSeR2_weak_25-35h', 'ANSeR2_weak_37-47h', 
                           'ANSeR2_strong_6-48h']
     test_dataset_name = ['ANSeR1_strong_6-48h']
@@ -43,7 +57,9 @@ def read_dev_test_data(window_length):
 
     dataset_name_info = 'train dataset: '
     for dataname in train_dataset_name:
-        fn = '{}/NN_epoch_{}_{}min_std_0.12.mat'.format(data_dir, dataname, window_length)
+        fn = data_dir / f'NN_epoch_{dataname}_{window_length}min_std_0.12.mat'
+        if not fn.is_file():
+            raise FileNotFoundError(f'Required preprocessed dataset file is missing: {fn}')
         epoch_dict = scio.loadmat(fn)
         NN_epochs = epoch_dict['NN_epoch_ANSeR'][0]
         n_files = len(NN_epochs['file_id'])
@@ -54,7 +70,9 @@ def read_dev_test_data(window_length):
     dataset_name_info = dataset_name_info[:-2] + '.\n'
     dataset_name_info += 'test dataset: '
     for dataname in test_dataset_name:
-        fn = '{}/NN_epoch_{}_{}min_std_0.12.mat'.format(data_dir, dataname, window_length)
+        fn = data_dir / f'NN_epoch_{dataname}_{window_length}min_std_0.12.mat'
+        if not fn.is_file():
+            raise FileNotFoundError(f'Required preprocessed dataset file is missing: {fn}')
         epoch_dict = scio.loadmat(fn)
         NN_epochs = epoch_dict['NN_epoch_ANSeR'][0]
         n_files = len(NN_epochs['file_id'])
@@ -95,7 +113,7 @@ def read_dev_test_data(window_length):
 
     return NN_epochs_dev_org, NN_epochs_test_org
 
-def read_split_data(window_length, seed_epoch, train_epoch_ratio=1.0):
+def read_split_data(window_length, seed_epoch, train_epoch_ratio=1.0, data_root=None):
     """ Read the rr struct file and split them as train and validation set.
     Args:
         #window_length(int or str): the window length of the rr in mins (2 or 5).
@@ -105,7 +123,7 @@ def read_split_data(window_length, seed_epoch, train_epoch_ratio=1.0):
         val_epochs(np struct): split train epochs.
     """
     # 1). read the rr struct file        
-    NN_epochs_dev_org, NN_epochs_test_org = read_dev_test_data(window_length)
+    NN_epochs_dev_org, NN_epochs_test_org = read_dev_test_data(window_length, data_root=data_root)
     N_files_dev = len(NN_epochs_dev_org)
     N_epochs_test = len(NN_epochs_test_org)
 
@@ -275,4 +293,3 @@ class SignalDataset(Dataset):
 if __name__ == "__main__":
 
     pass
-    
